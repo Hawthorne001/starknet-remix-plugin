@@ -51,24 +51,11 @@ jobs:
         with:
           mask-password: 'true'
 
-      # - name: Update local Rust toolchain
-      #   run: |
-      #     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain stable -y
-      #     rustup update
-      #     rustup component add clippy
-      #     rustup install nightly          
-
-      # - name: Toolchain info
-      #   run: |
-      #     cargo --version --verbose
-      #     rustc --version
-      #     cargo clippy --version          
-
-      # - name: Build
-      #   run: |
-      #     cd api
-      #     cargo build           
-      #     ls ./target/debug/ -al
+      - name: Get Scarb version
+        id: get_scarb_version
+        run: |
+          SCARB_VERSION=$(cat .scarb-version | sed 's/v//') 
+          echo "scarb_version=${SCARB_VERSION}" >> $GITHUB_ENV
 
       - name: Build, tag, and push docker image to Amazon ECR
         env:
@@ -76,7 +63,7 @@ jobs:
           REPOSITORY: ${{ env.REPOSITORY }}
           IMAGE_TAG: ${{ inputs.version }}
         run: |
-          docker build -t $REGISTRY/$REPOSITORY:apiserver-$IMAGE_TAG -f ./DockerfileRocket .
+          docker build -t $REGISTRY/$REPOSITORY:apiserver-$IMAGE_TAG --build-arg=SCARB_VERSION=${{ env.scarb_version }} -f ./DockerfileRocket .
           docker push $REGISTRY/$REPOSITORY:apiserver-$IMAGE_TAG
     outputs:
       image-version: ${{ inputs.version }}
@@ -145,12 +132,17 @@ jobs:
           # inject the expected React package URL for CORS logic
           environment-variables: |
             RUST_LOG=INFO
+            ENVIRONMENT=dev
+            METRICS_PORT=8001
             VITE_URL=https://cairo-remix.nethermind.io
+            SERVICE_VERSION=v${{ needs.Build.outputs.image-version }}
             PROMTAIL_USERNAME=${{secrets.PROMTAIL_USERNAME}}
             PROMTAIL_PASSWORD=${{secrets.PROMTAIL_PASSWORD}}
+            PROMETHEUS_USERNAME=${{secrets.PROMETHEUS_USERNAME}}
+            PROMETHEUS_PASSWORD=${{secrets.PROMETHEUS_PASSWORD}}
 
       - name: Deploy Amazon ECS task definition
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.task-def.outputs.task-definition }}
           service: ${{ env.PROD_SERVICE_NAME }}

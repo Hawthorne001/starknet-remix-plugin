@@ -1,4 +1,4 @@
-use crate::types::{ApiError, Result};
+use crate::errors::{ApiError, NetworkError, Result, SystemError};
 use crate::utils::lib::timestamp;
 use crate::worker::Timestamp;
 use crossbeam_queue::ArrayQueue;
@@ -61,7 +61,7 @@ impl RateLimiter {
 
             if current_time - time <= 60 {
                 // 1 minute
-                queue.push(time).map_err(|_| ApiError::QueueIsFull)?;
+                queue.push(time).map_err(|_| SystemError::QueueIsFull)?;
                 break;
             }
         }
@@ -80,7 +80,7 @@ impl RateLimiter {
 
         queue
             .push(current_time)
-            .map_err(|_| ApiError::QueueIsFull)?;
+            .map_err(|_| SystemError::QueueIsFull)?;
 
         Ok(())
     }
@@ -91,7 +91,7 @@ impl RateLimiter {
         let mut last_purge = self
             .last_purge
             .lock()
-            .map_err(|_| ApiError::MutexUnlockError)?;
+            .map_err(|_| SystemError::MutexUnlockError)?;
 
         if now - *last_purge > 60 * 60 {
             info!("Purging call queue in the rate limiter");
@@ -115,22 +115,30 @@ impl<'r> FromRequest<'r> for RateLimited {
     async fn from_request(request: &'r Request<'_>) -> Outcome<Self, Self::Error> {
         let rate_limiter: &RateLimiter = match request.rocket().state() {
             None => {
-                return Outcome::Failure((
+                return Outcome::Error((
                     Status::InternalServerError,
-                    ApiError::RateLimiterNotInState,
+                    SystemError::RateLimiterNotInState.into(),
                 ))
             }
             Some(x) => x,
         };
 
         let client_ip = match request.client_ip() {
-            None => return Outcome::Failure((Status::BadRequest, ApiError::FailedToGetClientIp)),
+            None => {
+                return Outcome::Error((
+                    Status::BadRequest,
+                    NetworkError::FailedToGetClientIp.into(),
+                ))
+            }
             Some(x) => x,
         };
 
         match rate_limiter.do_rate_limit(client_ip) {
             Ok(_) => Outcome::Success(RateLimited),
-            Err(_) => Outcome::Failure((Status::TooManyRequests, ApiError::TooManyRequests)),
+            Err(_) => Outcome::Error((
+                Status::TooManyRequests,
+                NetworkError::TooManyRequests.into(),
+            )),
         }
     }
 }
